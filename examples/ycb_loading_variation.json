@@ -1,0 +1,7 @@
+{
+  "loading_tilt_deg": 20.0,
+  "friction_low": 0.6,
+  "friction_high": 1.4,
+  "mass_low": 0.7,
+  "mass_high": 1.3
+}
