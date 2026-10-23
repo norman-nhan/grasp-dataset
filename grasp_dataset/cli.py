@@ -12,6 +12,7 @@ from . import __version__
 from .accessibility import APPROACH_VERSION, EVALUATOR_VERSION, FIELDS
 from .scene import Scene, SHARE
 from .geometry import Sampling, generate
+from .pc_geometry import generate as generate_from_point_cloud, load_registered
 from .simulation import Environment, Physics
 from .storage import SCHEMA, save, load, aggregate, externalize_trace
 from .affordance import load_points, overlap
@@ -33,6 +34,9 @@ def parser():
     p.add_argument('--num-trials', type=int, default=1)
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--surface-points', type=int, default=2500)
+    p.add_argument('--point-cloud', type=Path, help='NPZ containing source points and normals; bypasses mesh surface sampling')
+    p.add_argument('--point-cloud-transform', type=Path, help='Required 4x4 source-to-object similarity transform (object frame in metres)')
+    p.add_argument('--point-cloud-oriented-normals', action='store_true', help='Trust supplied normal signs; default treats PCA normal signs as ambiguous')
     p.add_argument('--approaches', type=int, default=8)
     p.add_argument('--neighbors', type=int, default=96)
     p.add_argument('--pairs-per-point', type=int, default=1, help='Limit retained pairs per surface point for spatial coverage')
@@ -56,6 +60,8 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if bool(args.point_cloud) != bool(args.point_cloud_transform):
+        raise ValueError('--point-cloud and --point-cloud-transform must be supplied together')
     if args.mode == 'inspect':
         data = load(args.output)
         print(json.dumps(dict(metadata=data['metadata'], candidates=len(data['grasps']),
@@ -122,12 +128,24 @@ def main(argv=None):
     else:
         sampling = Sampling(args.surface_points,args.num_candidates,args.approaches,args.neighbors,args.min_width,args.max_width,
             args.friction,args.angular_tolerance_deg,args.seed,args.pairs_per_point)
-        records = generate(scene.mesh, env, sampling)
+        point_cloud_metadata = None
+        if args.point_cloud:
+            points, normals = load_registered(args.point_cloud, args.point_cloud_transform)
+            records = generate_from_point_cloud(points, normals, env, sampling,
+                unoriented_normals=not args.point_cloud_oriented_normals)
+            point_cloud_metadata = dict(
+                file=str(args.point_cloud.resolve()), transform_file=str(args.point_cloud_transform.resolve()),
+                geometry_sha256=hashlib.sha256(points.tobytes() + normals.tobytes()).hexdigest(), count=len(points),
+                normal_orientation='provided' if args.point_cloud_oriented_normals else 'pair_aligned')
+        else:
+            records = generate(scene.mesh, env, sampling)
         if not records:
-            raise ValueError('No antipodal pairs found; inspect mesh scale and opening limits')
+            raise ValueError('No antipodal pairs found; inspect point/mesh scale, normals, and opening limits')
         data = dict(schema=SCHEMA, metadata=dict(version=__version__, scene=str(scene.file), model=str(scene.model_file),
             evaluator_version=EVALUATOR_VERSION, environment=environment, support=support, trace_storage=trace_storage, scene_fingerprint=scene.fingerprint(), object_id=scene.name, object_config=scene.object, object_provenance=scene.config.get("provenance"),
-            mesh_watertight=scene.mesh_watertight, degenerate_faces_removed=scene.degenerate_faces_removed, gripper_configuration='extracted-openarm-right/'+scene.fingerprint(),
+            mesh_watertight=scene.mesh_watertight, degenerate_faces_removed=scene.degenerate_faces_removed,
+            candidate_geometry='point_cloud_normals' if args.point_cloud else 'mesh_surface', point_cloud=point_cloud_metadata,
+            gripper_configuration='extracted-openarm-right/'+scene.fingerprint(),
             gripper_limits_m=[env.min_width,env.max_width], contact_center_tcp=env.contact_center_tcp.tolist(),
             hand_T_tcp=env.tcp_hand.tolist(), sampling=asdict(sampling), physics=None, mujoco_version=mujoco.__version__,
             frames='metres; right handed; object_T_tcp; TCP axes match hand (+Y closing, +Z approach); quaternion wxyz',

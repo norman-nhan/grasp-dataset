@@ -17,7 +17,7 @@ import numpy as np
 import trimesh
 
 
-PROJECT = Path(__file__).resolve().parents[0]
+PROJECT = Path(__file__).resolve().parent
 DEFAULT_INPUT = PROJECT / "assets" / "ycb-affordance"
 DEFAULT_OUTPUT = PROJECT / "assets" / "ycb-affordance-mujoco"
 

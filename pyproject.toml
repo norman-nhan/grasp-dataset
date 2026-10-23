@@ -22,6 +22,7 @@ laso = [
     "coacd>=1.0.14",
     "scikit-image>=0.26.0",
 ]
+visualization = ["matplotlib>=3.9"]
 [project.scripts]
 openarm-dataset = "grasp_dataset.cli:main"
 openarm-scene = "grasp_dataset.simple_scene:main"

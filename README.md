@@ -14,6 +14,19 @@ This program create xml scene for mujoco. You should change the output and input
 python convert_ycb_to_mujoco.py
 ```
 
+## How to visualize grasp candidates
+**Analytical**: antipodal + friction cones checks
+```
+python generate_analytical_grasp.py --object <object_id>
+```
+- `object_id` is folder name contains `.npz` file. Run `python visualize_surface_normal.py --list` to see all available `object_id`
+
+**GraspNet**
+```
+python generate_graspnet_grasp.py --object <object_id>
+```
+## How to create cli
+To create cli for python file, edit it in `pyproject.toml`
 
 ## Simple OpenArm gripper scene
 
@@ -89,6 +102,34 @@ Open any generated model in the native MuJoCo viewer:
 python -m mujoco.viewer \
   --mjcf assets/ycb-affordance-mujoco/025_mug/model.xml
 ```
+
+## Visualize affordance surface normals
+
+Display the points and oriented surface normals stored in an affordance NPZ:
+
+```bash
+cd /ros2_ws/not-ros-pkg/dataset-generation
+UV_CACHE_DIR=/tmp/openarm-dataset-uv-cache uv sync --extra visualization
+source .venv/bin/activate
+python scripts/show_affordance_normals.py --list
+python scripts/show_affordance_normals.py --object 025_mug
+```
+
+For a headless PNG colored by human-grasp affordance score:
+
+```bash
+MPLBACKEND=Agg python scripts/show_affordance_normals.py \
+  --object 025_mug \
+  --color score \
+  --max-normals 500 \
+  --normal-length 0.01 \
+  --output outputs/normals/025_mug.png
+```
+
+`--color mask` shows binary affordance labels and `--color uniform` ignores
+affordance values. Normal arrows are deterministically subsampled for legibility;
+all object points remain visible. Use `--invert-normals` to diagnose an inward
+normal convention.
 
 Outputs are written to `assets/ycb-affordance-mujoco/<object>/`. Every object
 directory is portable and contains `model.xml`, the textured visual mesh,
@@ -251,6 +292,94 @@ openarm-dataset visualize \
 openarm-dataset visualize \
   -+-output outputs/bottle-knife-mug/laso/val/bottle/48202d357e79315e45891653421dc140.json --all
 ```
+
+### Generate candidates from LASO point-cloud normals
+
+LASO's original points preserve thin features, handles, and holes that surface
+reconstruction can smooth over or close. Candidate generation can therefore use
+the registered `affordance.npz` points and normals directly, while MuJoCo still
+uses the prepared `object.yaml` collision geometry for approach screening and
+physical evaluation:
+
+```bash
+openarm-dataset candidates \
+  --scene assets/laso/34ae0b61b0d8aaf2d7b20fded0142d7a-shell/object.yaml \
+  --point-cloud ../easy_handover/data/laso_grasp_only_affordance/34ae0b61b0d8aaf2d7b20fded0142d7a/affordance.npz \
+  --point-cloud-transform assets/laso/34ae0b61b0d8aaf2d7b20fded0142d7a-shell/annotation_to_object.json \
+  --num-candidates 384 --approaches 12 \
+  --output outputs/laso-mug/point-cloud-grasps.json
+```
+
+The transform is mandatory because LASO coordinates are normalized whereas
+OpenArm widths are in metres. By default PCA normal signs are considered
+ambiguous and are aligned per contact pair; this is safer on inner handle and
+cavity walls than centroid-based outward orientation. Use
+`--point-cloud-oriented-normals` only when the stored signs are known to be
+physically outward. `--surface-points` is a deterministic upper bound on source
+points (all 2048 LASO points are used by the default value of 2500).
+
+This avoids using a reconstructed mesh to propose contacts, but it does not
+turn a point cloud into collision geometry: MuJoCo still evaluates candidates
+against the prepared collision model. Consequently a reconstruction that
+incorrectly closes a hole may still reject or collide with an otherwise valid
+point-cloud candidate, and the simulation result describes that collision
+model rather than measured object geometry.
+
+To inspect the analytical result before simulation, use the standalone plotter:
+
+```bash
+python generate_analytical_grasp.py \
+  --object 34ae0b61b0d8aaf2d7b20fded0142d7a \
+  --num-candidates 100 --show-candidates 12 \
+  --output-json outputs/laso-mug/analytical-grasps.json \
+  --output outputs/laso-mug/analytical-grasps.png
+```
+
+Omit `--output` for an interactive window. Repeat `--grasp-id`, for example
+`--grasp-id 0 --grasp-id 9`, to display selected candidates instead of the
+first `--show-candidates` records.
+
+LASO semantic types are indexed in `laso_object_types.json` as category-to-ID
+lists. Both point-cloud visualizers use it automatically and show labels such
+as `mug: <object-id>`. Rebuild it after exporting more objects with:
+
+```bash
+python scripts/build_laso_object_types.py
+```
+
+This script is analytical only and does not load MuJoCo, `object.yaml`, mass,
+inertia, collision meshes, or other physics properties. Without `--transform`,
+contact positions and widths remain in LASO's normalized source units and the
+default maximum width is the point cloud's largest extent. Supply a registration
+and metric width limits when candidates must fit a physical gripper:
+
+```bash
+python generate_analytical_grasp.py \
+  --object 34ae0b61b0d8aaf2d7b20fded0142d7a \
+  --transform assets/laso/34ae0b61b0d8aaf2d7b20fded0142d7a-shell/annotation_to_object.json \
+  --min-width 0.005 --max-width 0.0825
+```
+
+### Generate LASO grasps with GraspNet
+
+Use the official GraspNet baseline and local Realsense checkpoint instead of
+the analytical contact-pair sampler. Run this in the dedicated CUDA environment:
+
+```bash
+source /ros2_ws/.venv/graspnet_env/bin/activate
+python generate_graspnet_grasp.py \
+  --object uc15ab6cd-e35a-40e0-83d2-7e05e88dd395 \
+  --max-candidates 100 --show-candidates 12 \
+  --output-json outputs/uc15ab6cd-graspnet.json \
+  --output outputs/uc15ab6cd-graspnet.png
+```
+
+LASO lacks metric scale. By default, the script looks up the object type in
+`laso_object_types.json` and scales its longest dimension using the explicit
+assumptions in `laso_class_extents_m.json`. Override that assumption with
+`--longest-extent-m` or a registered metric `--transform`. GraspNet inference
+uses multiple virtual views because LASO supplies an object cloud rather than a
+camera-frame RGB-D observation. The output is GraspNetAPI-compatible Nx17 rows.
 
 ### Smaller LASO mug example
 
