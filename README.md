@@ -9,6 +9,7 @@ python download_ycb_dataset.py
 ```
 
 ## Create model.xml for each ycb dataset object
+This program create xml scene for mujoco. You should change the output and input folder before running this command.
 ```bash
 python convert_ycb_to_mujoco.py
 ```
