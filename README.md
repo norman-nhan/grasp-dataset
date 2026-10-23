@@ -28,6 +28,23 @@ python generate_graspnet_grasp.py --object <object_id>
 ## How to create cli
 To create cli for python file, edit it in `pyproject.toml`
 
+## Project structure
+- `move_laso.py` is just for grouping laso id into same object category
+- `generate_graspnet_grasp_all.py` is for generating grasp candidates from GraspNet for all object in `data`.
+Currently the program stops at this object
+```
+Generating grasps for laso_grasp_only_affordance/earphone/301d3c7e7a8cd529c37e70ff83bcc2f
+Traceback (most recent call last):
+  File "/ros2_ws/not-ros-pkg/dataset-generation/generate_graspnet_grasp_all.py", line 25, in <module>
+    main()
+  File "/ros2_ws/not-ros-pkg/dataset-generation/generate_graspnet_grasp_all.py", line 17, in main
+    generate([
+  File "/ros2_ws/not-ros-pkg/dataset-generation/generate_graspnet_grasp.py", line 302, in main
+    raise ValueError(f"GraspNet produced no retained candidates; filtering={filtering}")
+ValueError: GraspNet produced no retained candidates; filtering={'raw': 3, 'nonfinite_rejected': 0, 'score_rejected': 0, 'width_rejected': 3, 'after_nms': 0, 'collision_rejected': 0, 'retained': 0}
+```
+
+
 ## Simple OpenArm gripper scene
 
 The `openarm-scene` command opens a minimal MuJoCo scene containing the real

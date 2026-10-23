@@ -11,12 +11,6 @@ from pathlib import Path
 import tempfile
 import numpy as np
 
-# Keep Matplotlib's cache out of a potentially read-only container home.
-os.environ.setdefault(
-    "MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / f"openarm-matplotlib-{os.getuid()}")
-)
-Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
-
 import matplotlib.pyplot as plt
 
 from grasp_dataset.geometry import Sampling

@@ -2,13 +2,11 @@
 """Generate and visualize LASO point-cloud grasps with GraspNet baseline."""
 
 from __future__ import annotations
-
+from pprint import pprint
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
-import tempfile
 
 import numpy as np
 
@@ -320,7 +318,7 @@ def main(argv: list[str] | None = None) -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_json.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"Saved {len(rows)} GraspNet candidates to {output_json}")
-    print(f"class={category or 'unknown'} scale={scale_metadata} filtering={filtering}")
+    pprint(f"class={category or 'unknown'} scale={scale_metadata} filtering={filtering}")
 
     figure = draw(points, affordance, rows, label, min(args.show_candidates, len(rows)))
     if args.output:
