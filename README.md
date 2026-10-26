@@ -29,12 +29,21 @@ python generate_graspnet_grasp.py --object <object_id>
 To create cli for python file, edit it in `pyproject.toml`
 
 ## Project structure
-- `move_laso.py` is just for grouping laso id into same object category
+- `move_laso.py` is just for grouping laso id into same object category. Unnecessary for later uses.
 - `generate_graspnet_grasp_all.py` is for generating grasp candidates from GraspNet for all object in `data`.
 
 The program saves failed object which doesn't have any grasp candidates in `outputs/graspnet/failed_objects.txt`
 
-
+## Evaluate GraspNet candidates with antipodal and friction cones checking
+```
+python eval_grasp.py \
+--grasps <path/to/grasp.json>
+```
+Example:
+```
+python eval_grasp.py \
+--grasps outputs/graspnet/ycb_affordance_data/025_mug/graspnet_grasps.json 
+```
 ## Simple OpenArm gripper scene
 
 The `openarm-scene` command opens a minimal MuJoCo scene containing the real
@@ -387,6 +396,44 @@ assumptions in `laso_class_extents_m.json`. Override that assumption with
 `--longest-extent-m` or a registered metric `--transform`. GraspNet inference
 uses multiple virtual views because LASO supplies an object cloud rather than a
 camera-frame RGB-D observation. The output is GraspNetAPI-compatible Nx17 rows.
+YCB affordance exports are detected from their metadata and used directly in
+metres; they do not require `--longest-extent-m` or `--transform`.
+
+Check generated GraspNet candidates against point-cloud antipodal contacts and
+Coulomb friction cones without MuJoCo:
+
+```bash
+python eval_grasp.py \
+  --grasps outputs/graspnet/ycb_affordance_data/025_mug/graspnet_grasps.json \
+  --output-json outputs/graspnet/ycb_affordance_data/025_mug/graspnet_grasps_antipodal.json \
+  --output outputs/graspnet/ycb_affordance_data/025_mug/graspnet_grasps_antipodal.png
+```
+
+The original `graspnet.rows` remain unchanged. Accepted rows are written to
+`antipodal.rows`, and `antipodal.candidates` records contact indices, points,
+normals, scores, thresholds, and rejection reasons for every source candidate.
+Evaluation is ordered: full-cloud left/right-finger, palm, and approach-sweep
+collision checks run first. A colliding candidate is immediately false with
+`antipodal_evaluated: false`; only collision-free candidates reach the contact
+and friction-cone checks.
+
+For occlusion-aware generation from a complete object cloud, render random
+perspective depth-buffer views and merge their GraspNet predictions:
+
+```bash
+source /ros2_ws/.venv/graspnet_env/bin/activate
+python generate_multiview_graspnet_grasp.py \
+  --object 025_mug --views 8 \
+  --output-json outputs/graspnet/025_mug_multiview.json \
+  --output outputs/graspnet/025_mug_multiview.png \
+  --views-output outputs/graspnet/025_mug_visible_views.png
+```
+
+This does not crop by 3D distance. Each camera uses perspective projection and
+a nearest-depth z-buffer; point splats cover gaps in sparse clouds so back and
+inner-wall samples behind the visible surface are removed. The annotation saves
+each view's exact visible source indices and the source view of every retained
+grasp. Final collision filtering uses the complete registered object cloud.
 
 ### Smaller LASO mug example
 

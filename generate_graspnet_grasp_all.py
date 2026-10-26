@@ -12,6 +12,7 @@ def catalog(data_root: Path) -> list[Path]:
 
 def main():
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    failures = []
 
     for npz_path in catalog(DATA_ROOT):
         object_id = npz_path.parent.relative_to(DATA_ROOT)
@@ -35,11 +36,12 @@ def main():
         except ValueError as e:
             print(f"Failed: {object_id} - {e}")
 
-            # Save failed object and error
-            with FAILED_LOG.open("a") as f:
-                f.write(f"{object_id}: {e}\n")
-
+            failures.append(f"{object_id}: {e}\n")
             continue
+
+    # This log describes the current run, so resolved failures do not linger.
+    FAILED_LOG.write_text("".join(failures))
+    print(f"Saved {len(failures)} failures to {FAILED_LOG}")
 
 
 if __name__ == "__main__":

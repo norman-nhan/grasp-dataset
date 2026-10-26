@@ -29,8 +29,17 @@ COLUMNS = [
     "translation_x", "translation_y", "translation_z", "object_id",
 ]
 
-
 def resolve_npz(data_root: Path, object_id: str | None, explicit: Path | None) -> Path:
+    """Magic function to find your npz file with just object_id.
+    
+    Expect:
+    ```
+    object_id/
+        |__affordance.npz
+    ```
+    """
+    if not data_root.exists():
+        raise ValueError("Invalid data root path!")
     if explicit is not None:
         path = explicit.resolve()
         if not path.is_file():
@@ -38,18 +47,17 @@ def resolve_npz(data_root: Path, object_id: str | None, explicit: Path | None) -
         return path
     if not object_id:
         raise ValueError("Supply --object or --npz")
-    direct = data_root / object_id
-    if direct.is_dir():
-        direct = direct / "affordance.npz"
-    if direct.is_file():
-        return direct.resolve()
-    matches = list(data_root.glob(f"**/{object_id}/affordance.npz"))
-    if len(matches) != 1:
-        raise ValueError(f"Expected one affordance.npz for {object_id!r}; found {len(matches)}. Use --npz")
-    return matches[0].resolve()
 
+    matches = list(data_root.rglob(f"{object_id}/affordance.npz")) # search directly under data/
+    if not len(matches): # between data and object id there is something else
+        matches = list(data_root.rglob(f"*/{object_id}/affordance.npz"))
+        if not len(matches):
+            raise ValueError(f"Unable to resolve {object_id}/affordance.npz. Use --npz")
+    
+    return matches[0]
 
 def load_npz(npz_file: Path) -> tuple[np.ndarray, np.ndarray | None]:
+    """Return xyz points and affordance score."""
     with np.load(npz_file, allow_pickle=False) as archive:
         if "points" not in archive:
             raise ValueError(f"{npz_file} has no 'points' array")
@@ -63,6 +71,56 @@ def load_npz(npz_file: Path) -> tuple[np.ndarray, np.ndarray | None]:
     if scores is not None and len(scores) != len(points):
         raise ValueError("affordance_score length does not match points")
     return points, scores
+
+
+def load_source_metadata(npz_file: Path) -> dict:
+    metadata_file = npz_file.with_name("metadata.json")
+    if not metadata_file.is_file():
+        return {}
+    metadata = json.loads(metadata_file.read_text())
+    if not isinstance(metadata, dict):
+        raise ValueError(f"{metadata_file} must contain a JSON object")
+    return metadata
+
+
+def prepare_metric_points(source_points: np.ndarray, npz_file: Path, metadata: dict,
+                          category: str | None, args) -> tuple[np.ndarray, dict]:
+    """Resolve metric coordinates without rescaling sources already in metres.
+    
+    Return scaled points and scale_metadata."""
+    if args.transform:
+        points, _ = load_registered(npz_file, args.transform.resolve())
+        return points.astype(np.float32), {
+            "method": "similarity_transform", "file": str(args.transform.resolve())}
+
+    if args.longest_extent_m is not None:
+        points, center, factor = metricize(source_points, args.longest_extent_m)
+        return points, {
+            "method": "explicit_longest_extent",
+            "longest_extent_m": args.longest_extent_m,
+            "source_center": center.astype(float).tolist(), "scale_to_m": factor,
+        }
+
+    schema = str(metadata.get("schema", ""))
+    units = str(metadata.get("units", "")).strip().lower()
+    if schema.startswith("ycb-") and units in ("metres", "meters", "metre", "meter", "m"):
+        return source_points.astype(np.float32, copy=True), {
+            "method": "source_metric_coordinates", "schema": schema,
+            "units": metadata["units"], "scale_to_m": 1.0,
+        }
+
+    extents = json.loads(args.class_extents.read_text())
+    if category not in extents:
+        raise ValueError(
+            f"Source {schema or 'without schema'} is not identified as metric YCB "
+            "and has no LASO class extent; supply --longest-extent-m or --transform")
+    extent = float(extents[category])
+    points, center, factor = metricize(source_points, extent)
+    return points, {
+        "method": "assumed_longest_extent", "longest_extent_m": extent,
+        "source_center": center.astype(float).tolist(), "scale_to_m": factor,
+        "warning": "LASO has no measured physical scale",
+    }
 
 
 def metricize(points: np.ndarray, longest_extent_m: float) -> tuple[np.ndarray, np.ndarray, float]:
@@ -145,26 +203,33 @@ def infer_view(model, decode, points: np.ndarray, basis: np.ndarray, args, rng) 
     return rows
 
 
-def filter_predictions(rows: np.ndarray, points: np.ndarray, args) -> tuple[np.ndarray, dict]:
-    finite = np.isfinite(rows).all(axis=1)
-    score = rows[:, 0] >= args.min_score
-    width = (rows[:, 1] >= args.min_width) & (rows[:, 1] <= args.max_width)
-    rows = rows[finite & score & width]
-    counts = {
+def filter_predictions(candidates: np.ndarray, points: np.ndarray, args) -> tuple[np.ndarray, dict]:
+    finite = np.isfinite(candidates).all(axis=1) # reject infinite/NaN candidates
+    score = candidates[:, 0] >= args.min_score # reject candidates that has score lower than min score
+    width = (candidates[:, 1] >= args.min_width) & (candidates[:, 1] <= args.max_width) # reject candidates that is bigger than OpenArm gripper max width.
+    
+    candidates = candidates[finite & score & width] # keep candidates that satisfy all conditions
+
+    log = {
         "raw": int(len(finite)), "nonfinite_rejected": int((~finite).sum()),
         "score_rejected": int((finite & ~score).sum()),
         "width_rejected": int((finite & score & ~width).sum()),
     }
-    if not len(rows):
-        counts.update(after_nms=0, collision_rejected=0, retained=0)
-        return rows, counts
 
+    # all candidates rejected
+    if not len(candidates):
+        log.update(after_nms=0, collision_rejected=0, retained=0)
+        return candidates, log
+
+    # Apply NMS for surviving candidates
     from graspnetAPI import GraspGroup
-    group = GraspGroup(rows.astype(np.float64)).nms(
+    group = GraspGroup(candidates.astype(np.float64)).nms(
         translation_thresh=args.nms_translation,
         rotation_thresh=np.deg2rad(args.nms_rotation_deg),
     ).sort_by_score()
-    counts["after_nms"] = len(group)
+    log["after_nms"] = len(group)
+
+    # Check collision after nms
     collision_rejected = 0
     if args.collision_thresh > 0 and len(group):
         root = args.graspnet_root
@@ -177,10 +242,12 @@ def filter_predictions(rows: np.ndarray, points: np.ndarray, args) -> tuple[np.n
             collision_thresh=args.collision_thresh,
         )
         collision_rejected = int(collision.sum())
-        group = group[~collision]
+        group = group[~collision] # keep candidates that collision = False
+
+    # Keep `max_candidates` from highest score rank
     result = group.grasp_group_array[:args.max_candidates].astype(np.float64)
-    counts.update(collision_rejected=collision_rejected, retained=len(result))
-    return result, counts
+    log.update(collision_rejected=collision_rejected, retained=len(result))
+    return result, log
 
 
 def equal_axes(axis, points: np.ndarray) -> None:
@@ -246,9 +313,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--views", type=int, default=8)
     p.add_argument("--camera-depth", type=float, default=0.5)
     p.add_argument("--num-points", type=int, default=20000)
-    p.add_argument("--proposals-per-view", type=int, default=1000)
+    p.add_argument("--proposals-per-view", type=int, default=2000)
     p.add_argument("--min-score", type=float, default=0.10)
-    p.add_argument("--min-width", type=float, default=0.008)
+    p.add_argument("--min-width", type=float, default=0.000)
     p.add_argument("--max-width", type=float, default=0.075)
     p.add_argument("--nms-translation", type=float, default=0.015)
     p.add_argument("--nms-rotation-deg", type=float, default=20.0)
@@ -256,7 +323,7 @@ def parser() -> argparse.ArgumentParser:
                    help="Set 0 to disable model-free point-cloud collision filtering")
     p.add_argument("--voxel-size", type=float, default=0.005)
     p.add_argument("--approach-distance", type=float, default=0.05)
-    p.add_argument("--max-candidates", type=int, default=100)
+    p.add_argument("--max-candidates", type=int, default=1000)
     p.add_argument("--show-candidates", type=int, default=12)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--output-json", type=Path)
@@ -271,26 +338,11 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("point and candidate counts must be positive")
     npz_file = resolve_npz(args.data_root.resolve(), args.object, args.npz)
     source_points, affordance = load_npz(npz_file)
+    source_metadata = load_source_metadata(npz_file)
     catalog = load_catalog(args.object_types) if args.object_types.is_file() else {}
     category = object_type(npz_file.parent.name, catalog) if catalog else None
-
-    if args.transform:
-        points, _ = load_registered(npz_file, args.transform.resolve())
-        points = points.astype(np.float32)
-        scale_metadata = {"method": "similarity_transform", "file": str(args.transform.resolve())}
-    else:
-        extent = args.longest_extent_m
-        if extent is None:
-            extents = json.loads(args.class_extents.read_text())
-            if category not in extents:
-                raise ValueError("Unknown LASO class extent; supply --longest-extent-m or --transform")
-            extent = float(extents[category])
-        points, center, factor = metricize(source_points, extent)
-        scale_metadata = {
-            "method": "assumed_longest_extent", "longest_extent_m": extent,
-            "source_center": center.astype(float).tolist(), "scale_to_m": factor,
-            "warning": "LASO has no measured physical scale",
-        }
+    points, scale_metadata = prepare_metric_points(
+        source_points, npz_file, source_metadata, category, args)
 
     model, decode, epoch = load_model(args.graspnet_root.resolve(), args.checkpoint.resolve())
     rng = np.random.default_rng(args.seed)
@@ -303,9 +355,10 @@ def main(argv: list[str] | None = None) -> None:
 
     label = f"{category}: {npz_file.parent.name}" if category else npz_file.parent.name
     payload = {
-        "schema": "laso-graspnet-candidates/v1",
+        "schema": "graspnet-candidates/v1",
         "source": {"file": str(npz_file), "object_id": npz_file.parent.name,
-                   "object_type": category, "point_count": len(points), "units": "metres"},
+                   "object_type": category, "source_schema": source_metadata.get("schema"),
+                   "point_count": len(points), "units": "metres"},
         "metric_scale": scale_metadata,
         "model": {"implementation": str(args.graspnet_root.resolve()),
                   "checkpoint": str(args.checkpoint.resolve()), "epoch": epoch},
