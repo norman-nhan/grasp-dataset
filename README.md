@@ -415,22 +415,76 @@ collision checks run first. A colliding candidate is immediately false with
 `antipodal_evaluated: false`; only collision-free candidates reach the contact
 and friction-cone checks.
 
+### Create standalone MuJoCo models for LASO objects
+
+After creating `visual.obj` and the convex collision OBJ files, generate a
+metric `model.xml` for every object below the LASO data root:
+
+```bash
+python convert_laso_to_mujoco.py \
+  --data-root data/laso_grasp_only_affordance
+```
+
+The converter reads the class-level longest dimensions from
+`laso_physical_dims_assumed.json`. It calculates one uniform scale as
+`assumed_longest_extent_m / source_longest_extent` and applies that same scale
+and centering transform to the visual mesh and every collision component. Each
+object is written to `<object>/mujoco/` with `model.xml`, transformed OBJ files,
+and `metadata.json`. Existing models are skipped unless `--overwrite` is used.
+
+For a single object or a different physical assumption:
+
+```bash
+python convert_laso_to_mujoco.py \
+  --data-root data/laso_grasp_only_affordance/mug/<id> \
+  --longest-extent-m 0.10 \
+  --mass-kg 0.25 \
+  --friction 1.0 0.01 0.001
+```
+
+The default total mass is 0.1 kg and the default sliding, torsional, and
+rolling friction values are `1.2 0.01 0.001`. Mass is distributed among convex
+parts by volume, allowing MuJoCo to infer inertia. These values and the
+class-level scale are explicit simulation assumptions, not measured LASO
+physics; the per-object metadata records them and the complete source-to-object
+transform.
+
 For mesh-based swept collision checking with the actual OpenArm gripper, first
-reconstruct a trustworthy watertight surface and then run:
+reconstruct the surface and generate separate convex collision meshes:
+
+```bash
+python coacd_decompose.py \
+  --ply data/laso_grasp_only_affordance/<class>/<id>/reconstructed_mesh.ply
+```
+
+Then run:
 
 ```bash
 python eval_grasp_mujoco.py \
   --grasps outputs/graspnet/<object>/graspnet_grasps.json \
-  --mesh data/laso_grasp_only_affordance/<class>/<id>/reconstructed_mesh.ply
+  --mesh data/laso_grasp_only_affordance/<class>/<id>/reconstructed_mesh.ply \
+  --collision-dir data/laso_grasp_only_affordance/<class>/<id>/collision_meshes
 ```
 
-The tool applies the grasp annotation's saved metric transform, prepares CoACD
-convex components, converts GraspNet's +X approach/+Y closing convention to the
-OpenArm TCP +Z approach/+Y closing convention, and evaluates the complete
-straight approach with MuJoCo signed geometry distances. It refuses a
-non-watertight reconstructed input instead of silently using one convex hull or
-allowing decomposition to invent an unreliable solid. The output suffix is
-`_mujoco_collision.json`; the source annotation is unchanged.
+`--collision-dir` defaults to `collision_meshes/` beside the reconstructed
+mesh. The evaluator does not run CoACD. It validates and loads each
+`part_*.obj`, applies the grasp annotation's saved metric transform to the
+surface and collision parts, converts GraspNet's +X approach/+Y closing
+convention to the OpenArm TCP +Z approach/+Y closing convention, and evaluates
+the complete straight approach with MuJoCo signed geometry distances. The
+output suffix is `_mujoco_collision.json`; the source annotation is unchanged.
+
+Open a selected source candidate in the native MuJoCo viewer with:
+
+```bash
+python eval_grasp_mujoco.py \
+  --grasps outputs/graspnet/<object>/graspnet_grasps.json \
+  --view-grasp 0
+```
+
+The viewer starts at the candidate's final grasp pose and commanded open
+width. Visual geometry is shown by default. The collision geometry is viewer
+geom group 3 and can be enabled from the viewer options.
 
 For occlusion-aware generation from a complete object cloud, render random
 perspective depth-buffer views and merge their GraspNet predictions:

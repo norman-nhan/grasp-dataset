@@ -4,20 +4,24 @@ import coacd
 import trimesh
 import argparse
 from pathlib import Path
-from reconstruct_mesh import DEFAULT_DATA_ROOT
+from reconstruct_mesh import DEFAULT_LASO_ROOT
 
 
 def save_obj(parts, outdir):
     outdir.mkdir(parents=True, exist_ok=True)
-
-    for index, (vertices, faces) in enumerate(parts):
-        part_mesh = trimesh.Trimesh(
-            vertices=np.asarray(vertices),
-            faces=np.asarray(faces),
-            process=False,
-        )
-        outpath = outdir / f'part_{index:02d}.obj'
-        part_mesh.export(outpath)
+    for i, (vertices, faces) in enumerate(parts):
+        part = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
+        # Convert to convex hull
+        try:
+            part = part.convex_hull
+        except (ValueError, RuntimeError):
+            print(f"Skipping degenerate component {i}")
+            continue
+        # if not part.is_watertight:
+        #     continue
+        # if abs(part.volume) < 1e-9:
+        #     continue
+        part.export(outdir / f"part_{i:02d}.obj")
     print(f'Saved {len(parts)} convex OBJ files to {outdir.resolve()}')
 
 
@@ -66,7 +70,7 @@ def parser() -> argparse.ArgumentParser:
     source = p.add_mutually_exclusive_group(required=True)
     source.add_argument("--ply", type=Path, help="Explicit reconstructed_mesh.ply")
     source.add_argument("--all", action="store_true", help="Decompose every object under --data-root")
-    p.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
+    p.add_argument("--data-root", type=Path, default=DEFAULT_LASO_ROOT)
     p.add_argument("--outdir", type=Path, help="Explicit output dir path. By default, save in `collision_meshes/` beside mesh file.")
     p.add_argument("--seed", type=int, default=42, help="random seed")
     p.add_argument("--max-convex-hull", type=int, default=64)
