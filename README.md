@@ -1,6 +1,4 @@
-# OpenArm offline grasp dataset generator
-
-Standalone geometry sampling → gripper-only MuJoCo trials → independent LASO labels → resumable JSON datasets. New runs use a minimal environment: the gripper, one target object, and an optional support plane. No ROS, MoveIt, IK, neural inference, or full-arm simulation.
+# Generating Grasp Dataset for OpenArm Gripper
 
 ## Download the official ycb dataset mesh and texture
 Before run below program, change output dir and object you want to download, etc. inside `download_ycb_dataset.py` first.
@@ -416,6 +414,23 @@ Evaluation is ordered: full-cloud left/right-finger, palm, and approach-sweep
 collision checks run first. A colliding candidate is immediately false with
 `antipodal_evaluated: false`; only collision-free candidates reach the contact
 and friction-cone checks.
+
+For mesh-based swept collision checking with the actual OpenArm gripper, first
+reconstruct a trustworthy watertight surface and then run:
+
+```bash
+python eval_grasp_mujoco.py \
+  --grasps outputs/graspnet/<object>/graspnet_grasps.json \
+  --mesh data/laso_grasp_only_affordance/<class>/<id>/reconstructed_mesh.ply
+```
+
+The tool applies the grasp annotation's saved metric transform, prepares CoACD
+convex components, converts GraspNet's +X approach/+Y closing convention to the
+OpenArm TCP +Z approach/+Y closing convention, and evaluates the complete
+straight approach with MuJoCo signed geometry distances. It refuses a
+non-watertight reconstructed input instead of silently using one convex hull or
+allowing decomposition to invent an unreliable solid. The output suffix is
+`_mujoco_collision.json`; the source annotation is unchanged.
 
 For occlusion-aware generation from a complete object cloud, render random
 perspective depth-buffer views and merge their GraspNet predictions:
