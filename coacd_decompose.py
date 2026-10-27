@@ -1,13 +1,10 @@
 '''Decompose non-convex mesh using CoACD.'''
-import re
-
-from networkx import is_empty
 import numpy as np
 import coacd
-from reconstruct_mesh import DEFAULT_DATA_ROOT
 import trimesh
-from pathlib import Path
 import argparse
+from pathlib import Path
+from reconstruct_mesh import DEFAULT_DATA_ROOT
 
 
 def save_obj(parts, outdir):
