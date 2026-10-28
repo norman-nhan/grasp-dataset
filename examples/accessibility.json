@@ -1,9 +1,0 @@
-{
-  "orientation_deg": 5.0,
-  "approach_noise_m": 0.001,
-  "approach_noise_deg": 2.0,
-  "friction_low": 0.8,
-  "friction_high": 1.2,
-  "mass_low": 0.9,
-  "mass_high": 1.1
-}

@@ -26,8 +26,11 @@ For collision checking in Mujoco, non-convex mesh must be decomposed into multip
 - `convert_ply2obj.py`: convert ply to obj because mujoco doesn't support ply.
 - `download_ycb_dataset.py`: useful to download the official ycb dataset.
 - `build_laso_object_types.py`: create `laso_object_types.json` to know which object id is belong to which object category.
-- `move_laso.py`: move laso object id into categoried group
 
-# Legacy 
-- `scripts/`: I don't know what is written inside there anymore
-- `examples/`: I don't know.
+# Data structure
+```
+mujoco/ # Contains collision meshes, visual mesh, model.xml
+affordance.npz
+affordance.ply
+metadata.json
+```
